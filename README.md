@@ -118,12 +118,40 @@ repository, or with the two commands above run twice back to back.
 
 ## What's verified vs. what you still have to trust
 
-- **Verified by this tool, cryptographically**: the attestation document/
-  quote is genuinely signed by real hardware (AWS's Nitro root CA, or
-  Intel's DCAP root via a PCCS), and its measurement matches the value you
-  supplied.
-- **Not verified by this tool**: that the expected measurement you supplied
-  actually corresponds to source code that does what it claims. That link
-  comes from a reproducible build plus an independent audit of the exact
-  commit that measurement was built from — outside this tool's scope, see
-  the main project's `TODO.md` for that side of the story.
+**Verified by this tool, cryptographically**: that a live attestation
+document/quote is genuinely signed by real hardware (AWS's Nitro root CA,
+or Intel's DCAP root via a PCCS), and that its measurement matches the
+`--expect-*` value you supplied. That's a pure equality check: "what's
+running right now is the same thing you told me to expect."
+
+**Not verified by this tool**: *why* you should trust that expected value
+in the first place. This tool has no opinion on the quality of the code
+behind a measurement — only on whether a live node matches it bit for bit.
+Closing that gap needs two things this tool doesn't do:
+
+1. **A reproducible build**, proving a specific published hash was actually
+   produced by building a specific, named source commit — not asserted, but
+   independently re-derivable by anyone (see this crate's own "Reproducing
+   the published build" section above, and the main project's `TODO.md`
+   item #15).
+2. **An independent audit** of that same commit, by someone other than
+   Velocity, confirming the source itself does what it claims and hides
+   nothing malicious — not done yet as of this writing.
+
+Concretely: if a commit with a hidden backdoor were built and its hash
+published, this tool would still report `PASS` for a live node running
+that exact commit — the hash matches, and matching is all this tool ever
+checks. It closes the *last* link in the trust chain ("what's running
+matches what was measured"), not the *first* one ("what was measured was
+actually safe"). Both links matter; this tool is deliberately scoped to
+only one of them.
+
+## An open invitation
+
+The source is public specifically so you don't have to take our word for
+any of this. Go read it. If you find a security issue, a logic error, or
+anything else wrong — in the verification logic, the CLI, the Dockerfile,
+the build recipe, any of it — please open an issue (or a pull request) on
+this repository. That's not a courtesy ask; it's the actual mechanism this
+tool is built around. A verifier nobody has ever tried to break is worth
+less than one that's genuinely been looked at.
