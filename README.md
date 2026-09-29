@@ -116,42 +116,29 @@ produced this exact byte-identical binary. Reproduce that check yourself with
 `scripts/wsl-check-attestation-verifier-reproducible-build.sh` in the main
 repository, or with the two commands above run twice back to back.
 
-## What's verified vs. what you still have to trust
+## What this actually proves — and the one real gap that's left
 
-**Verified by this tool, cryptographically**: that a live attestation
-document/quote is genuinely signed by real hardware (AWS's Nitro root CA,
-or Intel's DCAP root via a PCCS), and that its measurement matches the
-`--expect-*` value you supplied. That's a pure equality check: "what's
-running right now is the same thing you told me to expect."
+Put together — the public source in this repo, a reproducible build, and
+this verifier — the mechanism proves something concrete and checkable by
+anyone, not just us: **the exact code running inside a live TEE right now
+is byte-for-byte the same code published here.** Not by trusting our word
+for it. Every step is something you can do yourself: read the source,
+compile it (the build is reproducible — you get the identical hash we
+publish, see "Reproducing the published build" above), then run
+`attestation-verifier` against a live node and confirm its hardware-signed
+measurement matches that hash. If it matches, the code inside that TEE is
+provably the code you just read — no gap, no leap of faith.
 
-**Not verified by this tool**: *why* you should trust that expected value
-in the first place. This tool has no opinion on the quality of the code
-behind a measurement — only on whether a live node matches it bit for bit.
-Closing that gap needs two things this tool doesn't do:
-
-1. **A reproducible build**, proving a specific published hash was actually
-   produced by building a specific, named source commit — not asserted, but
-   independently re-derivable by anyone (see this crate's own "Reproducing
-   the published build" section above, and the main project's `TODO.md`
-   item #15).
-2. **An independent audit** of that same commit, by someone other than
-   Velocity, confirming the source itself does what it claims and hides
-   nothing malicious — not done yet as of this writing.
-
-Concretely: if a commit with a hidden backdoor were built and its hash
-published, this tool would still report `PASS` for a live node running
-that exact commit — the hash matches, and matching is all this tool ever
-checks. It closes the *last* link in the trust chain ("what's running
-matches what was measured"), not the *first* one ("what was measured was
-actually safe"). Both links matter; this tool is deliberately scoped to
-only one of them.
-
-## An open invitation
-
-The source is public specifically so you don't have to take our word for
-any of this. Go read it. If you find a security issue, a logic error, or
-anything else wrong — in the verification logic, the CLI, the Dockerfile,
-the build recipe, any of it — please open an issue (or a pull request) on
-this repository. That's not a courtesy ask; it's the actual mechanism this
-tool is built around. A verifier nobody has ever tried to break is worth
-less than one that's genuinely been looked at.
+What this doesn't cover is different, and we're precise about it rather
+than blurring the two together: **whether an independent, professional
+security review has gone over this code for bugs, design flaws, or
+anything else a proper audit would catch.** As of this writing, nobody
+outside our own team has done that yet. That's not a hole in the
+code-matches-code guarantee above — it's a separate, standing invitation,
+addressed to the security community specifically: read the code, try to
+break it, and open an issue (or a pull request) on this repository with
+whatever you find — a security issue, a logic error, or anything else worth
+fixing, in the verification logic, the CLI, the Dockerfile, or the build
+recipe. That's not a courtesy ask; it's the actual mechanism this project
+is built around. A verifier nobody has ever tried to break is worth less
+than one that's genuinely been looked at.
