@@ -116,29 +116,46 @@ produced this exact byte-identical binary. Reproduce that check yourself with
 `scripts/wsl-check-attestation-verifier-reproducible-build.sh` in the main
 repository, or with the two commands above run twice back to back.
 
-## What this actually proves — and the one real gap that's left
+## What this actually proves — scoped precisely, not oversold
 
-Put together — the public source in this repo, a reproducible build, and
-this verifier — the mechanism proves something concrete and checkable by
-anyone, not just us: **the exact code running inside a live TEE right now
-is byte-for-byte the same code published here.** Not by trusting our word
-for it. Every step is something you can do yourself: read the source,
-compile it (the build is reproducible — you get the identical hash we
-publish, see "Reproducing the published build" above), then run
-`attestation-verifier` against a live node and confirm its hardware-signed
-measurement matches that hash. If it matches, the code inside that TEE is
-provably the code you just read — no gap, no leap of faith.
+This tool verifies one thing, generically, for *any* measurement you give
+it: that a live TEE's hardware-signed attestation matches a hash you
+supply. That check is real and the same regardless of what produced the
+hash. What that check actually *means* depends entirely on whether the
+code behind that hash is itself something you can independently read —
+and here honesty requires separating two very different cases:
 
-What this doesn't cover is different, and we're precise about it rather
-than blurring the two together: **whether an independent, professional
-security review has gone over this code for bugs, design flaws, or
-anything else a proper audit would catch.** As of this writing, nobody
-outside our own team has done that yet. That's not a hole in the
-code-matches-code guarantee above — it's a separate, standing invitation,
-addressed to the security community specifically: read the code, try to
-break it, and open an issue (or a pull request) on this repository with
-whatever you find — a security issue, a logic error, or anything else worth
-fixing, in the verification logic, the CLI, the Dockerfile, or the build
-recipe. That's not a courtesy ask; it's the actual mechanism this project
-is built around. A verifier nobody has ever tried to break is worth less
-than one that's genuinely been looked at.
+**For this crate's own code** (`nitro.rs`/`dstack.rs`/the CLI — everything
+in this repo): the full chain closes. Read the source, build it
+(reproducibly — you get the identical hash we publish), and if you ever
+deployed this exact tool inside a TEE, `attestation-verifier` run by anyone
+else could confirm the live instance is running the code you just read.
+No gap, no leap of faith, for this code specifically.
+
+**For Velocity's actual production nodes — `tee-service`, `hsm-service`**:
+that chain does *not* close today, and we say so plainly rather than let
+the framing above imply otherwise. Those binaries are what's actually
+measured and checked in a real deployment, and their source is not public
+— it's Velocity's proprietary core. So today, pointing `attestation-
+verifier` at a real `tee-service`/`hsm-service` node proves the live
+measurement matches whatever hash Velocity published — real value on its
+own, since it catches silent tampering or drift between two checks over
+time — but it does **not** let an outside party read the code behind that
+hash and confirm it's honest, the way they could for this crate itself.
+Closing that gap for the production binaries specifically needs one of:
+an independent security audit of that source (under NDA, with the audit
+firm publicly vouching for the exact commit and its hash — see the main
+project's `TODO.md` item #15), or Velocity open-sourcing more of that
+stack over time. Neither is done yet. Stated here precisely so nobody
+reads more into "Code is Law" than what's actually true today.
+
+## An open invitation
+
+Regardless of that scope, the code that *is* here is fully open for
+exactly the reason above: read it, try to break it, and open an issue (or
+a pull request) on this repository with whatever you find — a security
+issue, a logic error, or anything else worth fixing, in the verification
+logic, the CLI, the Dockerfile, or the build recipe. That's not a courtesy
+ask; it's the actual mechanism this project is built around. A verifier
+nobody has ever tried to break is worth less than one that's genuinely
+been looked at.
