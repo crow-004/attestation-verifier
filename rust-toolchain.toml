@@ -1,0 +1,7 @@
+# Pinned for reproducible builds, same reasoning as the repo root's own
+# rust-toolchain.toml (TODO.md item #15): a floating toolchain means the same
+# source can compile to different bytes on different days. This copy exists
+# so the pin travels with this crate even when it's built standalone, outside
+# the main workspace, by someone who only has this directory.
+[toolchain]
+channel = "1.98.1"
