@@ -82,6 +82,23 @@ pub struct AttestationFacts {
     /// `fetch_raw_document_with_nonce` is the new entry point that sets
     /// this.
     pub nonce: Option<Vec<u8>>,
+    /// Whether this document came from a `--debug-mode`/`--attach-console`
+    /// enclave -- added 2026-10-01 after a real external review flagged its
+    /// absence. Detected the way AWS's own docs say to: "Enclaves booted in
+    /// debug mode generate attestation documents with PCRs that are made up
+    /// entirely of zeros" (docs.aws.amazon.com/enclaves/latest/user/
+    /// set-up-attestation.html, quoted verbatim, not paraphrased) -- a
+    /// document whose PCR0 is all-zero. A debug enclave's memory is
+    /// readable by the host, so this document proves nothing about
+    /// confidentiality even though it still cryptographically verifies (the
+    /// COSE_Sign1 signature and cert chain are real; AWS signs these
+    /// documents too). Not, by itself, exploitable against a caller who
+    /// always supplies a real non-zero `--expect-pcr0` (an all-zero PCR0
+    /// simply fails that comparison) -- but explicit rejection is still
+    /// worth having: a clear "this is a debug enclave" error beats a
+    /// generic PCR0 mismatch, and it closes the edge case of a misconfigured
+    /// all-zero expected value silently accepting one.
+    pub is_debug: bool,
 }
 
 /// Fetches a fresh, RAW attestation document from the real NSM device --
@@ -155,6 +172,7 @@ pub fn verify_and_parse(document: &[u8]) -> Result<AttestationFacts, NitroAttest
         .map(|pcr0| pcr0.to_vec())
         .ok_or(NitroAttestationError::MissingPcr0)?;
     let pcr8 = doc.pcrs.get(&8).map(|pcr8| pcr8.to_vec());
+    let is_debug = pcr0_indicates_debug_mode(&pcr0);
 
     Ok(AttestationFacts {
         pcr0,
@@ -162,6 +180,7 @@ pub fn verify_and_parse(document: &[u8]) -> Result<AttestationFacts, NitroAttest
         timestamp_secs: doc.timestamp / 1000,
         module_id: doc.module_id,
         nonce: doc.nonce.map(|n| n.to_vec()),
+        is_debug,
     })
 }
 
@@ -176,6 +195,16 @@ pub fn verify_and_parse(document: &[u8]) -> Result<AttestationFacts, NitroAttest
 /// resume_state`'s same "pure decision, I/O stays at the call site" shape.
 pub fn is_genuinely_new_module_id(previous: Option<&str>, new: &str) -> bool {
     previous != Some(new)
+}
+
+/// Pure decision, unit-testable without a real signed document: per AWS's
+/// own documentation (quoted in `AttestationFacts::is_debug`'s doc comment),
+/// a debug-mode enclave's attestation document has PCR0 made up entirely of
+/// zero bytes. A real enclave's PCR0 is a SHA-384 digest of real content --
+/// landing on all-zero by chance is cryptographically impossible, so this
+/// is a precise, not heuristic, signal.
+pub fn pcr0_indicates_debug_mode(pcr0: &[u8]) -> bool {
+    pcr0.iter().all(|&b| b == 0)
 }
 
 /// Fetches a fresh attestation document from the real NSM device and
@@ -209,6 +238,7 @@ mod tests {
         // regression or AWS having changed the PCR digest algorithm.
         assert_eq!(facts.pcr0.len(), 48, "PCR0 should be a 48-byte SHA384 digest");
         assert!(!facts.module_id.is_empty(), "module_id must be populated by NSM");
+        assert!(!facts.is_debug, "a real, non-debug enclave must never have all-zero PCR0");
 
         // A loose bound on purpose, not a tight one -- it just needs to
         // reject both an unset (0) timestamp and the exact regression this
@@ -293,5 +323,26 @@ mod tests {
         // to be identical to the last recorded one -- must not be treated
         // as progress.
         assert!(!is_genuinely_new_module_id(Some("i-abc-enc111"), "i-abc-enc111"));
+    }
+
+    #[test]
+    fn pcr0_indicates_debug_mode_detects_all_zero_pcr0() {
+        assert!(pcr0_indicates_debug_mode(&[0u8; 48]));
+    }
+
+    #[test]
+    fn pcr0_indicates_debug_mode_rejects_a_real_looking_pcr0() {
+        let mut pcr0 = [0u8; 48];
+        pcr0[47] = 1; // one nonzero byte is enough to disqualify it
+        assert!(!pcr0_indicates_debug_mode(&pcr0));
+    }
+
+    #[test]
+    fn pcr0_indicates_debug_mode_rejects_a_pcr0_with_only_a_leading_nonzero_byte() {
+        // Regression guard: a naive "first byte is zero" check would wrongly
+        // call this debug mode. Every byte must be checked.
+        let mut pcr0 = [0u8; 48];
+        pcr0[0] = 0xff;
+        assert!(!pcr0_indicates_debug_mode(&pcr0));
     }
 }

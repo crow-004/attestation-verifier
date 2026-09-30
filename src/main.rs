@@ -76,12 +76,18 @@ fn print_usage() {
     eprintln!("With --quote-file <path>: verifies raw bytes read from that file instead --");
     eprintln!("usable from anywhere, e.g. checking a quote relayed from a remote node.");
     eprintln!();
-    eprintln!("Freshness (live mode only, mutually exclusive with each other and with --quote-file):");
+    eprintln!("Checking a node you're ON (live mode, the two flags below):");
     eprintln!("  --random-nonce            generate, use, print, and auto-verify a real random nonce");
     eprintln!("  --live-nonce <hex>        use this exact nonce/report_data (dstack: must be 64 bytes)");
-    eprintln!("  either way, the round trip is checked automatically -- no extra flag needed.");
-    eprintln!("  --expect-nonce/--expect-report-data are separate: for checking a value agreed on");
-    eprintln!("  out of band, against a RELAYED quote read via --quote-file.");
+    eprintln!("  mutually exclusive with each other and with --quote-file; the round trip is");
+    eprintln!("  checked automatically either way -- no extra flag needed.");
+    eprintln!();
+    eprintln!("Checking a node you're NOT on (offline mode, --quote-file + one round trip you");
+    eprintln!("arrange yourself -- see README.md's \"Checking someone else's node\" for the full");
+    eprintln!("recipe): send the node a nonce, have it embed that nonce in a quote by whatever");
+    eprintln!("channel it exposes, save that quote to a file, then:");
+    eprintln!("  --quote-file <path> --expect-nonce <hex>            (nitro)");
+    eprintln!("  --quote-file <path> --expect-report-data <hex>      (dstack)");
     eprintln!();
     eprintln!("dstack-only:");
     eprintln!("  --allow-tcb-status <STATUS>   repeatable; default if omitted: UpToDate only.");
@@ -89,8 +95,20 @@ fn print_usage() {
     eprintln!("                                allow-list -- there is no way to skip this check.");
     eprintln!("  --pccs-url <url>              use a PCCS other than Phala's default");
     eprintln!();
-    eprintln!("Exit code 0 only if every check (including the dstack TCB-status check) passes;");
-    eprintln!("at least one --expect-* check is required.");
+    eprintln!("Both backends, always checked, refuses a debug-mode enclave/TD by default (its");
+    eprintln!("memory is host-readable -- a quote from one proves nothing about confidentiality");
+    eprintln!("even though it still cryptographically verifies):");
+    eprintln!("  --allow-debug             accept a debug-mode enclave/TD anyway (testing only)");
+    eprintln!();
+    eprintln!("Checking a node you don't operate (live mode only): --dump-raw <path> saves the");
+    eprintln!("raw fetched document/quote to a file instead of only verifying it locally --");
+    eprintln!("hand that file to whoever should independently verify it. Pair with --live-nonce");
+    eprintln!("<hex> (a value THEY chose) so they can confirm it came back unchanged via");
+    eprintln!("--expect-nonce/--expect-report-data once you send it over. Waives the \"at least");
+    eprintln!("one --expect-*\" requirement below (a pure dump has nothing local to check).");
+    eprintln!();
+    eprintln!("Exit code 0 only if every check (TCB status, debug mode, and every --expect-*) passes;");
+    eprintln!("at least one --expect-* check is required, unless --dump-raw is given.");
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -102,6 +120,8 @@ struct Args {
     pccs_url: Option<String>,
     live_nonce_hex: Option<String>,
     random_nonce: bool,
+    allow_debug: bool,
+    dump_raw: Option<String>,
 }
 
 fn parse_args(raw: &[String]) -> Result<Args, String> {
@@ -112,6 +132,8 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
     let mut pccs_url = None;
     let mut live_nonce_hex = None;
     let mut random_nonce = false;
+    let mut allow_debug = false;
+    let mut dump_raw = None;
     let mut i = 0;
     while i < raw.len() {
         let flag = raw[i].as_str();
@@ -141,6 +163,15 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
                 i += 1;
                 continue;
             }
+            "--allow-debug" => {
+                allow_debug = true;
+                i += 1;
+                continue;
+            }
+            "--dump-raw" => {
+                dump_raw = Some(next_value(raw, &mut i, flag)?);
+                continue;
+            }
             "--expect-pcr0" => "pcr0",
             "--expect-pcr8" => "pcr8",
             "--expect-nonce" => "nonce",
@@ -160,8 +191,8 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
     if backend != "nitro" && backend != "dstack" {
         return Err(format!("--backend must be \"nitro\" or \"dstack\", got \"{backend}\""));
     }
-    if expect.is_empty() {
-        return Err("at least one --expect-* check is required".to_string());
+    if expect.is_empty() && dump_raw.is_none() {
+        return Err("at least one --expect-* check is required (unless --dump-raw is given)".to_string());
     }
     if live_nonce_hex.is_some() && random_nonce {
         return Err("--live-nonce and --random-nonce are mutually exclusive".to_string());
@@ -169,10 +200,13 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
     if quote_file.is_some() && (live_nonce_hex.is_some() || random_nonce) {
         return Err("--live-nonce/--random-nonce only apply to a live fetch, not --quote-file".to_string());
     }
+    if quote_file.is_some() && dump_raw.is_some() {
+        return Err("--dump-raw only applies to a live fetch, not --quote-file (the file is already raw bytes)".to_string());
+    }
     if allow_tcb_status.is_empty() {
         allow_tcb_status.push("UpToDate".to_string());
     }
-    Ok(Args { backend, quote_file, expect, allow_tcb_status, pccs_url, live_nonce_hex, random_nonce })
+    Ok(Args { backend, quote_file, expect, allow_tcb_status, pccs_url, live_nonce_hex, random_nonce, allow_debug, dump_raw })
 }
 
 fn next_value(raw: &[String], i: &mut usize, flag: &str) -> Result<String, String> {
@@ -281,7 +315,13 @@ fn print_results(results: &[CheckResult]) -> bool {
     all_passed
 }
 
-fn run_nitro(quote_file: Option<&str>, expect: &[(String, String)], live_nonce: Option<Vec<u8>>) -> Result<Vec<CheckResult>, String> {
+fn run_nitro(
+    quote_file: Option<&str>,
+    expect: &[(String, String)],
+    live_nonce: Option<Vec<u8>>,
+    allow_debug: bool,
+    dump_raw: Option<&str>,
+) -> Result<Vec<CheckResult>, String> {
     let document = match quote_file {
         Some(path) => fs::read(path).map_err(|e| format!("failed to read --quote-file {path}: {e}"))?,
         None => match &live_nonce {
@@ -291,8 +331,31 @@ fn run_nitro(quote_file: Option<&str>, expect: &[(String, String)], live_nonce: 
                 .map_err(|e| format!("fetch_raw_document failed: {e} (expected unless run on real Nitro hardware)"))?,
         },
     };
+
+    // Saved before verification, deliberately -- the point is handing this
+    // file to whoever should independently verify it, which must not
+    // depend on THIS run's own (possibly incomplete or absent) --expect-*
+    // checks succeeding.
+    if let Some(path) = dump_raw {
+        fs::write(path, &document).map_err(|e| format!("failed to write --dump-raw {path}: {e}"))?;
+        println!("raw attestation document saved to {path} ({} bytes)", document.len());
+    }
+
     let facts = attestation_verifier::nitro::verify_and_parse(&document).map_err(|e| format!("verify_and_parse failed: {e}"))?;
     println!("VERIFIED real Nitro attestation document. module_id: {}", facts.module_id);
+
+    // Not opt-in, same reasoning as dstack's tcb_status check below: a
+    // debug-mode enclave's document still cryptographically verifies (AWS
+    // signs these too) but proves nothing about confidentiality (the host
+    // can read a debug enclave's memory). Detected as an all-zero PCR0, per
+    // AWS's own documented behavior -- see `nitro::AttestationFacts::
+    // is_debug`'s doc comment for the exact quote.
+    let mut results = vec![CheckResult {
+        field: "debug_mode".to_string(),
+        expected: if allow_debug { "debug allowed".to_string() } else { "not debug".to_string() },
+        actual: if facts.is_debug { "debug".to_string() } else { "not debug".to_string() },
+        passed: !facts.is_debug || allow_debug,
+    }];
 
     // When a live nonce was sent, the round-trip check is automatic -- not
     // something the caller has to separately ask for via --expect-nonce,
@@ -301,7 +364,6 @@ fn run_nitro(quote_file: Option<&str>, expect: &[(String, String)], live_nonce: 
     // generates it). This is the actual freshness proof: the hardware
     // signed a nonce chosen just before this call, into a document produced
     // just now, not replayed from earlier.
-    let mut results = Vec::new();
     if let Some(sent) = &live_nonce {
         println!("live nonce sent for this fetch: {}", hex_encode(sent));
         let received = facts.nonce.as_deref().map(hex_encode);
@@ -334,6 +396,8 @@ async fn run_dstack(
     allow_tcb_status: &[String],
     pccs_url: Option<&str>,
     live_nonce: Option<Vec<u8>>,
+    allow_debug: bool,
+    dump_raw: Option<&str>,
 ) -> Result<Vec<CheckResult>, String> {
     let quote = match quote_file {
         Some(path) => fs::read(path).map_err(|e| format!("failed to read --quote-file {path}: {e}"))?,
@@ -345,6 +409,12 @@ async fn run_dstack(
                 .quote
         }
     };
+
+    if let Some(path) = dump_raw {
+        fs::write(path, &quote).map_err(|e| format!("failed to write --dump-raw {path}: {e}"))?;
+        println!("raw TDX quote saved to {path} ({} bytes)", quote.len());
+    }
+
     let facts = match pccs_url {
         Some(url) => attestation_verifier::dstack::verify_and_parse_with_pccs(&quote, url).await,
         None => attestation_verifier::dstack::verify_and_parse(&quote).await,
@@ -362,12 +432,26 @@ async fn run_dstack(
     // for" statuses like OutOfDate or ConfigurationNeeded, unless the
     // caller explicitly opted into accepting them via --allow-tcb-status.
     let tcb_ok = allow_tcb_status.iter().any(|allowed| allowed.eq_ignore_ascii_case(&facts.tcb_status));
-    let mut results = vec![CheckResult {
-        field: "tcb_status".to_string(),
-        expected: allow_tcb_status.join(" or "),
-        actual: facts.tcb_status.clone(),
-        passed: tcb_ok,
-    }];
+    let mut results = vec![
+        CheckResult {
+            field: "tcb_status".to_string(),
+            expected: allow_tcb_status.join(" or "),
+            actual: facts.tcb_status.clone(),
+            passed: tcb_ok,
+        },
+        // Same reasoning as run_nitro's identical check -- a debug TD's
+        // memory is host-readable, so a quote from one proves nothing about
+        // confidentiality even though it still cryptographically verifies.
+        // Cross-checked against Lanetus/TTKServer#17's own real
+        // implementation, not derived from the Intel spec alone -- see
+        // `dstack::AttestationFacts::is_debug`'s doc comment.
+        CheckResult {
+            field: "debug_mode".to_string(),
+            expected: if allow_debug { "debug allowed".to_string() } else { "not debug".to_string() },
+            actual: if facts.is_debug { "debug".to_string() } else { "not debug".to_string() },
+            passed: !facts.is_debug || allow_debug,
+        },
+    ];
 
     // Same automatic-round-trip reasoning as run_nitro's identical block --
     // see its comment. Only added when the caller explicitly opted into a
@@ -450,8 +534,19 @@ async fn main() -> ExitCode {
     };
 
     let results = match args.backend.as_str() {
-        "nitro" => run_nitro(args.quote_file.as_deref(), &args.expect, live_nonce),
-        "dstack" => run_dstack(args.quote_file.as_deref(), &args.expect, &args.allow_tcb_status, args.pccs_url.as_deref(), live_nonce).await,
+        "nitro" => run_nitro(args.quote_file.as_deref(), &args.expect, live_nonce, args.allow_debug, args.dump_raw.as_deref()),
+        "dstack" => {
+            run_dstack(
+                args.quote_file.as_deref(),
+                &args.expect,
+                &args.allow_tcb_status,
+                args.pccs_url.as_deref(),
+                live_nonce,
+                args.allow_debug,
+                args.dump_raw.as_deref(),
+            )
+            .await
+        }
         _ => unreachable!("parse_args already validated backend"),
     };
 
@@ -605,6 +700,54 @@ mod tests {
     }
 
     #[test]
+    fn parse_args_defaults_allow_debug_to_false() {
+        let args = parse_args(&base_args(&[])).expect("valid");
+        assert!(!args.allow_debug);
+    }
+
+    #[test]
+    fn parse_args_accepts_allow_debug() {
+        let raw = vec![s("--backend"), s("nitro"), s("--expect-pcr0"), s("aa"), s("--allow-debug")];
+        let args = parse_args(&raw).expect("valid");
+        assert!(args.allow_debug);
+    }
+
+    #[test]
+    fn parse_args_accepts_dump_raw_with_no_expect_checks() {
+        // The whole point of --dump-raw: an operator who doesn't know or
+        // care about expected measurement values should still be able to
+        // fetch-and-save without being forced to supply a placeholder
+        // --expect-*.
+        let raw = vec![s("--backend"), s("nitro"), s("--dump-raw"), s("/tmp/out.bin")];
+        let args = parse_args(&raw).expect("valid");
+        assert_eq!(args.dump_raw, Some(s("/tmp/out.bin")));
+        assert!(args.expect.is_empty());
+    }
+
+    #[test]
+    fn parse_args_rejects_dump_raw_with_quote_file() {
+        let raw = vec![
+            s("--backend"),
+            s("nitro"),
+            s("--quote-file"),
+            s("/tmp/in.bin"),
+            s("--expect-pcr0"),
+            s("aa"),
+            s("--dump-raw"),
+            s("/tmp/out.bin"),
+        ];
+        let err = parse_args(&raw).unwrap_err();
+        assert!(err.contains("--dump-raw"), "got: {err}");
+    }
+
+    #[test]
+    fn parse_args_still_requires_expect_without_dump_raw() {
+        let raw = vec![s("--backend"), s("nitro")];
+        let err = parse_args(&raw).unwrap_err();
+        assert!(err.contains("--expect"), "got: {err}");
+    }
+
+    #[test]
     fn parse_args_accepts_live_nonce_hex() {
         let raw = vec![s("--backend"), s("nitro"), s("--expect-pcr0"), s("aa"), s("--live-nonce"), s("deadbeef")];
         let args = parse_args(&raw).expect("valid");
@@ -724,7 +867,7 @@ mod tests {
         std::fs::write(&path, b"this is not a real attestation document").unwrap();
 
         let expect = vec![(s("pcr0"), s("aabb"))];
-        let err = run_nitro(Some(path.to_str().unwrap()), &expect, None).unwrap_err();
+        let err = run_nitro(Some(path.to_str().unwrap()), &expect, None, false, None).unwrap_err();
         assert!(err.contains("verify_and_parse failed"), "expected a clean verification error, got: {err}");
 
         std::fs::remove_dir_all(&dir).ok();
@@ -737,7 +880,7 @@ mod tests {
         // clear error rather than hanging or panicking, same discipline as
         // every other real-attestation path in this project.
         let expect = vec![(s("pcr0"), s("aabb"))];
-        let err = run_nitro(None, &expect, None).unwrap_err();
+        let err = run_nitro(None, &expect, None, false, None).unwrap_err();
         assert!(err.contains("fetch_raw_document failed"), "expected a clean no-hardware error, got: {err}");
     }
 
@@ -747,7 +890,7 @@ mod tests {
         // different function, fetch_raw_document_with_nonce) -- must fail
         // the same clean way, not panic or silently skip the nonce.
         let expect = vec![(s("pcr0"), s("aabb"))];
-        let err = run_nitro(None, &expect, Some(vec![1, 2, 3])).unwrap_err();
+        let err = run_nitro(None, &expect, Some(vec![1, 2, 3]), false, None).unwrap_err();
         assert!(
             err.contains("fetch_raw_document_with_nonce failed"),
             "expected a clean no-hardware error naming the nonce path, got: {err}"

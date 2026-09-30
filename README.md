@@ -93,13 +93,69 @@ it, so this is a choice of availability/privacy, never of trust — override
 with `--pccs-url <url>` if you'd rather ask Intel's own PCS or a self-hosted
 mirror.
 
+**Debug-mode enclaves/TDs are rejected by default, on both backends, not
+opt-in.** A debug enclave's/TD's memory is readable by the host it runs on
+-- a quote from one still cryptographically verifies (AWS signs Nitro debug
+documents too; a debug TD's quote passes DCAP the same as any other), but
+proves nothing about confidentiality. Detected precisely, not heuristically:
+Nitro debug documents have PCR0 made up entirely of zero bytes (AWS's own
+documented behavior); TDX debug TDs have bit 0 of `TD_ATTRIBUTES` set (cross-
+checked against `Lanetus/TTKServer#17`'s own real implementation, not the
+spec alone). Pass `--allow-debug` to accept one anyway -- for testing against
+your own debug-mode instance, never for a node you're trusting for real.
+
+## Checking someone else's node
+
+Live mode (`--random-nonce`, no `--quote-file`) only works ON the node being
+checked -- fine for self-checks, but the actual point of this tool is a
+third party checking a node they don't operate. There's no automatic
+"request a fresh quote from a remote node" transport here (that depends on
+whatever channel the node operator exposes -- an API, SSH, a support
+ticket), but once you have one, the recipe is the same on both backends:
+
+1. Generate a nonce yourself: `openssl rand -hex 32` (nitro, any length) or
+   `openssl rand -hex 64` (dstack, must be exactly 64 raw bytes / 128 hex
+   chars).
+2. Send that hex value to the node operator and ask them to run this, on
+   the node, and send back the resulting file:
+   ```bash
+   attestation-verifier --backend nitro  --live-nonce <hex-you-sent> --dump-raw document.bin
+   attestation-verifier --backend dstack --live-nonce <hex-you-sent> --dump-raw quote.bin
+   ```
+   `--dump-raw` saves the raw fetched bytes to a file and needs no
+   `--expect-*` of its own (the operator doesn't need to know or trust any
+   published measurement to do this step -- they're just a courier). The
+   node still doesn't need any NEW code or endpoint for this to work: it's
+   this same published CLI, already independently buildable, run once by
+   whoever has access.
+3. Once you have that file, verify it yourself, independently, checking the
+   nonce came back unchanged (the actual freshness proof -- this is what
+   stops a stale, previously-captured quote from passing as current):
+   ```bash
+   attestation-verifier --backend nitro  --quote-file document.bin --expect-pcr0 <hex> --expect-nonce <hex-you-sent>
+   attestation-verifier --backend dstack --quote-file quote.bin    --expect-mr-td <hex> --expect-report-data <hex-you-sent>
+   ```
+
+This closes the same gap a fixed/no nonce would leave open: TDX quotes carry
+no signed timestamp of their own (unlike Nitro's document, which does), so a
+nonce you generated and verify came back unchanged is the only honest way to
+know a quote was produced after you asked for it, not replayed from earlier.
+The operator running step 2 still has to be someone you extend a minimum of
+trust to for the handoff itself (they could refuse to run it, or claim a
+different result than they got) -- this recipe proves the QUOTE is fresh and
+genuine once you have it, not that the person who fetched it acted in good
+faith getting it to you.
+
 ## Known limitations, disclosed plainly
 
-Found by a real, independent code review (2026-09-30) that compared this
-crate line-by-line against a much larger existing attestation tool and
-reported exactly what it found — credit due, and the reason several of the
-items above (TCB enforcement, RTMR/PCR8 checks, nonce support, PCCS choice)
-exist at all. What's still genuinely open after that pass:
+Found by two rounds of real, independent code review (2026-09-30, 2026-10-01)
+— one comparing this crate line-by-line against a much larger existing
+attestation tool, the other against a real API-response-attestation project
+with a genuinely different protocol but comparable trust reasoning — credit
+due both times, and the reason most of what's documented above (TCB
+enforcement, RTMR/PCR8 checks, nonce support, PCCS choice, debug-mode
+rejection, `--dump-raw`, this whole section) exists at all. What's still
+genuinely open:
 
 - **Nitro's PCR8 support only compares a value you already trust.** PCR8 is
   the SHA-384 hash of the EIF's signing certificate, when present — this
@@ -107,20 +163,45 @@ exist at all. What's still genuinely open after that pass:
   independently establish that certificate belongs to Velocity. Useful as
   an additional binding once you already trust a published PCR8, not a
   replacement for PCR0.
-- **`--quote-file`/offline mode has no built-in quote-age limit.** DCAP
-  collateral freshness (is the TCB info itself current) is checked against
-  wall-clock "now" inside `dcap_qvl::verify`, but the QUOTE's own age isn't
-  separately bounded — a still-valid but months-old quote from a node that
-  has since been redeployed would still pass unless you also pass
-  `--expect-report-data`/`--expect-nonce` with a value you independently
-  know is recent. Revoked/rotated platforms specifically ARE still caught
-  (TCB status is rechecked against current collateral on every run), so
-  this gap is about staleness short of outright revocation.
+- **Certificate expiry IS checked, confirmed by reading the actual
+  dependency source, not assumed.** A fair question the second review round
+  raised (the crate's own docs.rs page doesn't make this obvious): does
+  `attestation-doc-validation` reject a Nitro document signed by an expired
+  certificate? Yes — `cert.rs`'s `validate_cert_trust_chain` gets the current
+  time (`time.rs`'s `get_epoch()`, real `SystemTime::now()`, with a
+  `FAKETIME` override for that crate's own tests) and passes it to
+  `webpki::Time` / `verify_is_valid_tls_server_cert`, which checks
+  NotBefore/NotAfter as a standard part of chain validation. Nitro's leaf
+  certificate is documented to live only hours, so in practice this already
+  gives offline mode a rough, real freshness bound on the Nitro side — a
+  months-old saved document won't just fail on content, it'll fail on an
+  expired leaf cert first. Not independently re-verified by THIS crate
+  (would be redundant — it's already happening one layer down), and TDX's
+  DCAP collateral freshness is a separate mechanism (`dcap_qvl::verify`
+  against current TCB info), already documented above.
+- **`--quote-file`/offline mode still has no built-in check for a STILL-VALID
+  but stale quote/document** (distinct from an outright-expired one, which
+  the point above now closes for Nitro, and from a revoked/rotated platform,
+  which TCB-status rechecking already catches for dstack). See "Checking
+  someone else's node" above for the actual honest fix — a nonce you
+  generated and verify came back unchanged — now with `--dump-raw` making
+  that a real, followable recipe instead of a theoretical one.
 - **Live mode checks the hardware it's running on** — genuinely independent
   verification needs either a truly separate machine running this tool
   against a relayed `--quote-file`, or someone else entirely running the
   live check themselves. Running it live and trusting your own result isn't
   wrong, just not the "independent" half of what this tool is for.
+- **No real saved fixture exists yet for a genuine positive test** ("a real
+  attestation document/quote verifies successfully") — every existing test
+  is negative (garbage input, no hardware present). Capturing one needs
+  real Nitro/TDX hardware and is tracked, not silently skipped: see TODO.md
+  item #15 in the main repository.
+- **Nodes don't yet expose a "quote for this nonce" endpoint of their own**
+  — the "Checking someone else's node" recipe above works today because
+  this CLI itself can be run by the node operator, but a real design
+  partner would reasonably want this built into `tee-service`/`hsm-service`
+  directly rather than asking an operator to separately clone and run this
+  tool. Tracked, not started: TODO.md item #15.
 
 ## Building it yourself
 
@@ -137,11 +218,30 @@ installed on your machine.
 ## Reproducing the published build, exactly
 
 This crate's `Dockerfile` is not just a convenience — it's the actual
-specification of how the published binary/hash below was produced: a pinned
-base image (by digest, not a floating tag), a pinned Rust toolchain, `strip
-= true` + `codegen-units = 1` to remove the two biggest realistic sources of
-non-determinism, and `--remap-path-prefix` so the build's own working
-directory never leaks into the binary. Reproduce it yourself:
+specification of how the published binary/hash below was produced. What's
+actually pinned, following the same "name every input, don't just say
+'reproducible'" discipline a real external review pointed to as worth
+copying from another project's own reproducible-build writeup:
+
+| Input | Pinned to | Why it matters if it weren't |
+|---|---|---|
+| Base image | `rust@sha256:7cc1c22d77...` (digest, not `rust:1-alpine`) | A floating tag resolves to whatever Rust/Alpine patch is current that day |
+| Rust toolchain | `rust-toolchain.toml` → `1.98.1`, matching the base image's own rustc | A different compiler version can emit different code for identical source |
+| Dependency versions | `Cargo.lock`, copied into the image, built with `--locked` | Without this (a real gap, closed 2026-10-01 — see the Dockerfile's own comment), patch releases of `dcap-qvl`/`dstack-sdk`/etc. silently drift the binary over time |
+| File timestamps in debug info | `strip = true` (removes debug info entirely, the biggest realistic source) | Embedded build-time timestamps would make every build's bytes differ even from identical source |
+| Codegen ordering | `codegen-units = 1` | Parallel codegen units can be scheduled/merged in a different order between runs |
+| Absolute build path | `RUSTFLAGS=--remap-path-prefix=/build=/attestation-verifier-src` | `WORKDIR` is already fixed at `/build` regardless of the host's own checkout path, so this guards the cargo registry's own source-unpacking path instead, defensively |
+| Build timestamp | `SOURCE_DATE_EPOCH=1700000000` | Defensive, not a fix for a confirmed problem — nothing in this specific build currently embeds it, but a future dependency addition might |
+
+**Worth stating plainly, the same way that other project's writeup does**:
+this only pins WHAT gets built, not that every crates.io dependency in the
+tree is itself byte-for-byte reproducible from ITS OWN source — that's each
+of those crates' own reproducibility story, outside this recipe's control.
+And changing anything at all in this crate's own source — including a
+comment with no behavioral effect — changes the resulting hash; that's the
+correct, expected behavior of a hash, not a flaw to route around.
+
+Reproduce it yourself:
 
 ```bash
 docker build --no-cache --target build -t attestation-verifier-check -f Dockerfile .
@@ -177,7 +277,7 @@ checkable by you, right now."
 
 ```
 sha256 (attestation-verifier, x86_64-unknown-linux-musl, release):
-f13a22c56382c1ab80922a0830b424912ef90bf55bcc8939059243d39061a3d1
+55c6120f91551f00a2ffb7453c8b8b4283f84d4f0c552becf54263e3c519d524
 ```
 
 Verified for real, not asserted: built twice, independently, with `--no-cache`
@@ -186,12 +286,16 @@ produced this exact byte-identical binary. Reproduce that check yourself with
 `scripts/wsl-check-attestation-verifier-reproducible-build.sh` in the main
 repository, or with the two commands above run twice back to back.
 
-(Updated 2026-10-01 after the TCB/RTMR/PCCS/nonce fixes below — the previous
-published hash, `df05ec1672be348e58c0daeafe3c190f6f1fb04b62e432c522ab18f321819b14`,
-was for the source as of 2026-09-29 and no longer matches current `main`. This
-crate's whole point is that the published hash always matches the current
-source, so it's updated here every time the source changes, not just at
-release milestones.)
+(Updated 2026-10-01, twice the same day. First for the TCB/RTMR/PCCS/nonce
+fixes — previous hash `df05ec1672be348e58c0daeafe3c190f6f1fb04b62e432c522ab18f321819b14`
+(source as of 2026-09-29). Second, same day, for debug-mode rejection,
+`--dump-raw`, and the `Cargo.lock`/`--locked` reproducible-build fix below —
+previous hash `f13a22c56382c1ab80922a0830b424912ef90bf55bcc8939059243d39061a3d1`.
+This crate's whole point is that the published hash always matches the
+current source, so it's updated here every time the source changes, not
+just at release milestones — both superseded hashes kept visible above
+rather than quietly overwritten, same reason the main project's TODO.md
+keeps superseded claims next to their corrections.)
 
 ## What this actually proves — scoped precisely, not oversold
 

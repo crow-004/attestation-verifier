@@ -108,6 +108,18 @@ pub struct AttestationFacts {
     /// review found the CLI reported this field without ever gating on it).
     pub tcb_status: String,
     pub advisory_ids: Vec<String>,
+    /// Whether this TD was launched with the DEBUG attribute set -- added
+    /// 2026-10-01 after a real external review flagged its absence (citing
+    /// `Lanetus/TTKServer#17`, a separate real implementation, as prior art
+    /// for rejecting debug TDs by default). A debug TD's memory is readable
+    /// by the host, so a quote from one proves nothing about confidentiality
+    /// even though it still cryptographically verifies. Detected from
+    /// `TDReport10::td_attributes` (`[u8; 8]`, little-endian per Intel's TDX
+    /// Module ABI spec): bit 0 is `TUD.DEBUG` -- cross-checked against
+    /// `Lanetus/TTKServer`'s own real, reviewed implementation
+    /// (`TD_ATTRIBUTE_DEBUG: u64 = 1`, read little-endian), not derived from
+    /// the spec alone.
+    pub is_debug: bool,
 }
 
 /// A raw, UNVERIFIED response from dstack's guest agent. `quote` is the
@@ -189,6 +201,7 @@ pub async fn verify_and_parse_with_pccs(quote: &[u8], pccs_url: &str) -> Result<
         dcap_qvl::verify::verify(quote, &collateral, now_secs).map_err(|e| DstackAttestationError::VerificationFailed(e.to_string()))?;
 
     let td_report = verified.report.as_td10().ok_or(DstackAttestationError::NotATdxReport)?;
+    let is_debug = td_attributes_indicate_debug_mode(td_report.td_attributes);
 
     Ok(AttestationFacts {
         mr_td: td_report.mr_td,
@@ -202,7 +215,16 @@ pub async fn verify_and_parse_with_pccs(quote: &[u8], pccs_url: &str) -> Result<
         report_data: td_report.report_data,
         tcb_status: verified.status,
         advisory_ids: verified.advisory_ids,
+        is_debug,
     })
+}
+
+/// Pure decision, unit-testable without a real quote: bit 0 (`TUD.DEBUG`)
+/// of `TD_ATTRIBUTES`, read little-endian -- see `AttestationFacts::
+/// is_debug`'s doc comment for the cross-checked source of that bit
+/// position.
+fn td_attributes_indicate_debug_mode(td_attributes: [u8; 8]) -> bool {
+    u64::from_le_bytes(td_attributes) & 1 != 0
 }
 
 #[cfg(test)]
@@ -274,5 +296,31 @@ mod tests {
             matches!(err, DstackAttestationError::CollateralFetchFailed(_) | DstackAttestationError::VerificationFailed(_)),
             "expected a clean collateral-fetch or verification error, got {err:?}"
         );
+    }
+
+    #[test]
+    fn td_attributes_indicate_debug_mode_detects_bit_0_set() {
+        assert!(td_attributes_indicate_debug_mode([1, 0, 0, 0, 0, 0, 0, 0]));
+    }
+
+    #[test]
+    fn td_attributes_indicate_debug_mode_rejects_all_zero() {
+        assert!(!td_attributes_indicate_debug_mode([0; 8]));
+    }
+
+    #[test]
+    fn td_attributes_indicate_debug_mode_ignores_other_bits() {
+        // Only bit 0 is DEBUG -- other attribute bits being set (real TDs
+        // have several, e.g. SEPT_VE_DISABLE) must not be mistaken for it.
+        assert!(!td_attributes_indicate_debug_mode([0b1111_1110, 0, 0, 0, 0, 0, 0, 0]));
+    }
+
+    #[test]
+    fn td_attributes_indicate_debug_mode_reads_little_endian() {
+        // Bit 0 of the little-endian u64 is the FIRST byte's low bit, not
+        // the last byte's -- a big-endian-by-mistake implementation would
+        // fail this.
+        assert!(!td_attributes_indicate_debug_mode([0, 0, 0, 0, 0, 0, 0, 1]));
+        assert!(td_attributes_indicate_debug_mode([1, 0, 0, 0, 0, 0, 0, 0]));
     }
 }
