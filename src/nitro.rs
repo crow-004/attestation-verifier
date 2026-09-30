@@ -59,6 +59,13 @@ pub enum NitroAttestationError {
 #[derive(Debug)]
 pub struct AttestationFacts {
     pub pcr0: Vec<u8>,
+    /// PCR8, when present: the SHA-384 hash of the enclave image file's
+    /// signing certificate -- a "who signed this build" fact, distinct from
+    /// PCR0's "what code is this" fact. `None` when the document has no
+    /// PCR8 entry at all (an EIF built without `--signing-certificate`, the
+    /// common case for a dev/CI build that isn't yet part of a signed
+    /// release pipeline -- not an error, just "not present here").
+    pub pcr8: Option<Vec<u8>>,
     /// NSM's own `timestamp` field, converted from the wire format
     /// (milliseconds since the Unix epoch, per the NSM API's CDDL schema)
     /// to whole seconds — `kdf_core`'s `issued_at`/`verify_freshness` are
@@ -66,6 +73,15 @@ pub struct AttestationFacts {
     /// every `max_age_seconds` policy meaningless.
     pub timestamp_secs: u64,
     pub module_id: String,
+    /// Echoes back the `nonce` this document was requested with, if any --
+    /// added 2026-09-30 after a real external review pointed out that
+    /// `fetch_raw_document`'s original hardcoded `nonce: None` meant this
+    /// crate's own CLI had no way to prove a fetched document was fresh
+    /// rather than replayed. `None` when no nonce was requested (the
+    /// original, still-default behavior via `fetch_raw_document`) --
+    /// `fetch_raw_document_with_nonce` is the new entry point that sets
+    /// this.
+    pub nonce: Option<Vec<u8>>,
 }
 
 /// Fetches a fresh, RAW attestation document from the real NSM device --
@@ -76,7 +92,26 @@ pub struct AttestationFacts {
 /// receiving end -- see `verify_and_parse`). Only meaningful inside a real
 /// running enclave (`/dev/nsm` present); `NoDevice` off real hardware, same
 /// as before.
+///
+/// Requests no nonce (matches this function's original, still-unchanged
+/// signature and behavior, so every existing caller -- `tee-service`'s own
+/// self-report, both examples -- is unaffected). Use
+/// `fetch_raw_document_with_nonce` for a freshness-provable fetch.
 pub fn fetch_raw_document() -> Result<Vec<u8>, NitroAttestationError> {
+    fetch_raw_document_with_optional_nonce(None)
+}
+
+/// Same as `fetch_raw_document`, but binds the document to a caller-chosen
+/// nonce (up to 512 bytes per the NSM API) -- NSM signs the nonce INTO the
+/// document, so a verifier who generated that nonce themselves and checks
+/// it comes back unchanged (`AttestationFacts::nonce`) has real, hardware-
+/// backed proof this exact document was produced after the nonce existed,
+/// not replayed from an earlier, possibly-stale fetch.
+pub fn fetch_raw_document_with_nonce(nonce: &[u8]) -> Result<Vec<u8>, NitroAttestationError> {
+    fetch_raw_document_with_optional_nonce(Some(nonce))
+}
+
+fn fetch_raw_document_with_optional_nonce(nonce: Option<&[u8]>) -> Result<Vec<u8>, NitroAttestationError> {
     let fd = nsm_init();
     if fd < 0 {
         return Err(NitroAttestationError::NoDevice);
@@ -86,7 +121,7 @@ pub fn fetch_raw_document() -> Result<Vec<u8>, NitroAttestationError> {
         fd,
         Request::Attestation {
             user_data: None,
-            nonce: None,
+            nonce: nonce.map(|n| n.to_vec().into()),
             public_key: None,
         },
     );
@@ -119,11 +154,14 @@ pub fn verify_and_parse(document: &[u8]) -> Result<AttestationFacts, NitroAttest
         .get(&0)
         .map(|pcr0| pcr0.to_vec())
         .ok_or(NitroAttestationError::MissingPcr0)?;
+    let pcr8 = doc.pcrs.get(&8).map(|pcr8| pcr8.to_vec());
 
     Ok(AttestationFacts {
         pcr0,
+        pcr8,
         timestamp_secs: doc.timestamp / 1000,
         module_id: doc.module_id,
+        nonce: doc.nonce.map(|n| n.to_vec()),
     })
 }
 

@@ -102,7 +102,10 @@ pub struct AttestationFacts {
     /// deciding whether e.g. "OutOfDate" is acceptable is left to the
     /// caller/policy layer, mirroring how `nitro::verify_and_parse` doesn't
     /// editorialize about freshness or revocation either -- that's
-    /// `kdf_core::VerificationEngine`'s job, not this module's.
+    /// `kdf_core::VerificationEngine`'s job, not this module's (this crate's
+    /// own `main.rs` CLI, unlike `kdf_core`, DOES enforce a default policy
+    /// here -- `--allow-tcb-status`, added 2026-09-30 after a real external
+    /// review found the CLI reported this field without ever gating on it).
     pub tcb_status: String,
     pub advisory_ids: Vec<String>,
 }
@@ -161,8 +164,20 @@ pub async fn fetch_raw_quote(report_data: &[u8]) -> Result<RawQuoteResponse, Dst
 /// see `AttestationFacts::tcb_status`'s own doc comment for why that's not
 /// enforced here.
 pub async fn verify_and_parse(quote: &[u8]) -> Result<AttestationFacts, DstackAttestationError> {
-    let collateral_client = dcap_qvl::collateral::CollateralClient::with_default_http(dcap_qvl::collateral::PHALA_PCCS_URL)
-        .map_err(|e| DstackAttestationError::CollateralFetchFailed(e.to_string()))?;
+    verify_and_parse_with_pccs(quote, dcap_qvl::collateral::PHALA_PCCS_URL).await
+}
+
+/// Same as `verify_and_parse`, but against a caller-chosen PCCS instead of
+/// Phala's own. Split out (2026-09-30, real external review, see TODO.md
+/// item #15) so a caller who doesn't want Phala's PCCS in their trust/
+/// availability/privacy path -- e.g. Intel's own PCS, or a self-hosted
+/// mirror -- isn't stuck with it: `dcap_qvl::verify` independently checks
+/// the returned collateral's own signature chain up to Intel's real root CA
+/// regardless of which PCCS served the bytes, so this is a choice of who to
+/// ask, never a choice of who to trust.
+pub async fn verify_and_parse_with_pccs(quote: &[u8], pccs_url: &str) -> Result<AttestationFacts, DstackAttestationError> {
+    let collateral_client =
+        dcap_qvl::collateral::CollateralClient::with_default_http(pccs_url).map_err(|e| DstackAttestationError::CollateralFetchFailed(e.to_string()))?;
     let collateral = collateral_client.fetch(quote).await.map_err(|e| DstackAttestationError::CollateralFetchFailed(e.to_string()))?;
 
     let now_secs = std::time::SystemTime::now()

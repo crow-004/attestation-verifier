@@ -39,6 +39,13 @@ dstack-sdk = { version = "0.1", optional = true }
 hex = { version = "0.4", optional = true }
 dcap-qvl = { version = "0.6", optional = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+# --random-nonce (main.rs, added 2026-09-30 after a real external review):
+# real OS-CSPRNG bytes for a freshness-provable live attestation check, not
+# a hand-rolled time/pid-based value. Already present in this crate's own
+# dependency tree transitively (pulled in by attestation-doc-validation/
+# dcap-qvl's own crypto deps) -- this just promotes it to a direct,
+# version-pinned dependency rather than relying on an indirect one.
+getrandom = "0.2"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "test-util"] }
