@@ -298,6 +298,49 @@ mod tests {
         );
     }
 
+    // The first genuine POSITIVE test this module has ever had, mirroring
+    // nitro.rs's `real_fixture_from_a_genuinely_running_enclave_verifies_
+    // successfully` -- every test above is negative (garbage/empty input, no
+    // socket present). Captured 2026-10-01 from a real, throwaway Phala
+    // Cloud TDX CVM (`crates/tee-adapter/examples/dstack_quote_probe.rs`,
+    // run as `ghcr.io/crow-004/velocity-dstack-probe` inside that CVM, the
+    // raw quote hex copied out of its own log output and decoded locally),
+    // independently re-verified at capture time by that same probe run and
+    // again here by the real `attestation-verifier` CLI binary (`RESULT: all
+    // checks passed` against this exact fixture and MRTD). See TODO.md item
+    // #15 for the full real-hardware account, including the three real
+    // infra problems hit and fixed along the way (a private GHCR package, a
+    // CVM stuck in "stopped" status, and the required-but-not-auto-injected
+    // `/var/run/dstack.sock` volume mount).
+    //
+    // Deliberately NOT `#[ignore]`d, unlike the Nitro fixture test: a DCAP
+    // quote's freshness is gated by `tcb_status` (checked against Intel's
+    // live PCCS collateral on every call, including this one), not by an
+    // X.509 leaf certificate's fixed few-hour validity window the way a
+    // Nitro COSE_Sign1 document is -- so nothing about this fixture is
+    // expected to start failing merely because time has passed, the same
+    // reasoning that already lets `verify_and_parse_rejects_garbage_bytes_
+    // without_panicking` above run unconditionally despite needing the same
+    // real PCCS network round trip. If Intel ever revokes this specific
+    // platform's TCB after capture, this test would start failing for a
+    // real (if unlikely) reason, not a false one.
+    #[tokio::test]
+    async fn real_fixture_from_a_genuinely_running_tdx_cvm_verifies_successfully() {
+        const REAL_MR_TD_HEX: &str = "f06dfda6dce1cf904d4e2bab1dc370634cf95cefa2ceb2de2eee127c9382698090d7a4a13e14c536ec6c9c3c8fa87077";
+        let quote = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/test-fixtures/real-tdx-quote-2026-10-01.bin"))
+            .expect("real fixture file should exist -- see TODO.md item #15");
+
+        let facts = verify_and_parse(&quote).await.expect(
+            "a real, previously-verified TDX quote should verify again -- if this fails, it is \
+             either a real regression or (far less likely than Nitro's cert-expiry case) a real \
+             TCB revocation for this platform after capture; any failure here is worth investigating",
+        );
+
+        assert!(!facts.is_debug, "this fixture was captured from a non-debug Phala Cloud TD (no debug-mode toggle exists there to test the opposite)");
+        let actual_mr_td = facts.mr_td.iter().map(|b| format!("{b:02x}")).collect::<String>();
+        assert_eq!(actual_mr_td, REAL_MR_TD_HEX, "MRTD must match the real CVM measurement recorded alongside this fixture");
+    }
+
     #[test]
     fn td_attributes_indicate_debug_mode_detects_bit_0_set() {
         assert!(td_attributes_indicate_debug_mode([1, 0, 0, 0, 0, 0, 0, 0]));

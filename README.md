@@ -203,11 +203,20 @@ genuinely open:
   against a relayed `--quote-file`, or someone else entirely running the
   live check themselves. Running it live and trusting your own result isn't
   wrong, just not the "independent" half of what this tool is for.
-- **No real saved fixture exists yet for a genuine positive test** ("a real
-  attestation document/quote verifies successfully") — every existing test
-  is negative (garbage input, no hardware present). Capturing one needs
-  real Nitro/TDX hardware and is tracked, not silently skipped: see TODO.md
-  item #15 in the main repository.
+- **Real saved fixtures now exist for both backends, closing what was this
+  section's own previous gap.** `nitro.rs`'s `real_fixture_from_a_genuinely_
+  running_enclave_verifies_successfully` (captured 2026-10-01, `#[ignore]`d —
+  a Nitro document's leaf certificate lives only hours, so this test ages out
+  and is re-run manually) and `dstack.rs`'s `real_fixture_from_a_genuinely_
+  running_tdx_cvm_verifies_successfully` (also captured 2026-10-01, but NOT
+  `#[ignore]`d — a DCAP quote's freshness is gated by `tcb_status`, checked
+  live against Intel's real PCCS collateral on every call, not tied to a
+  short-lived certificate the way Nitro's document is, so nothing about this
+  one is expected to go stale from time passing alone) each independently
+  verify a real captured document/quote end-to-end. Full account, including
+  the real infrastructure problems hit capturing the TDX one (a private GHCR
+  package, a CVM stuck "stopped", a required-but-not-auto-injected
+  `dstack.sock` mount): TODO.md item #15 in the main repository.
 - **Nodes don't yet expose a "quote for this nonce" endpoint of their own**
   — the "Checking someone else's node" recipe above works today because
   this CLI itself can be run by the node operator, but a real design
