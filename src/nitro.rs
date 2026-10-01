@@ -306,6 +306,51 @@ mod tests {
         assert!(matches!(err, NitroAttestationError::Validation(_)));
     }
 
+    // The first genuine POSITIVE test this module has ever had -- every test
+    // above is negative (garbage/empty input, no hardware present). Captured
+    // 2026-10-01 on the real, previously-stopped `velocity-nitro` EC2
+    // instance (see TODO.md item #15 for the full real-hardware account):
+    // a real, non-debug `module-id-report` enclave's actual NSM attestation
+    // document, relayed out over real AF_VSOCK via the new
+    // `dump_raw_document_host` example, independently re-verified at
+    // capture time with the real `attestation-verifier` CLI binary
+    // (`RESULT: all checks passed` against the real build's own PCR0).
+    //
+    // `#[ignore]`d, not a normal always-run test, for a real and disclosed
+    // reason: AWS Nitro leaf certificates live only hours, and
+    // `attestation-doc-validation` (this function's own dependency for the
+    // COSE_Sign1/cert-chain check) offers no way to override the clock it
+    // validates against from outside its own test suite -- confirmed
+    // against its real source, not assumed (its `FAKETIME` env-var support
+    // is `#[cfg(test)]`-gated INSIDE that crate, so it never compiles into
+    // the published library this crate depends on; a real captured document
+    // still reported `all checks passed` with `FAKETIME=2090844874` set
+    // locally, proving it has zero effect here). So this fixture's leaf
+    // cert WILL expire a few hours after capture, and this test will then
+    // correctly start failing on expired-certificate grounds -- not a
+    // regression, just time passing, exactly the failure mode `#[ignore]`
+    // exists to keep out of the normal `cargo test` run. Re-run manually
+    // (`cargo test -p attestation-verifier -- --ignored
+    // real_fixture_from_a_genuinely_running_enclave_verifies_successfully`)
+    // only soon after capture, or once a fresh fixture replaces this one.
+    #[test]
+    #[ignore]
+    fn real_fixture_from_a_genuinely_running_enclave_verifies_successfully() {
+        const REAL_PCR0_HEX: &str = "1ec798a18ac7b960cbbad87dd9c99e14d7c1ae2cb607d8ad3c6e9ff6e031d5571826c041ab2616fd20273fa512a6a1df";
+        let document = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/test-fixtures/real-nitro-document-2026-10-01.bin"))
+            .expect("real fixture file should exist -- see TODO.md item #15");
+
+        let facts = verify_and_parse(&document).expect(
+            "a real, freshly-captured document should verify -- if this fails with a \
+             certificate-expiry-shaped error, the fixture has simply aged out (see this \
+             test's own doc comment); any other failure is a real regression",
+        );
+
+        assert!(!facts.is_debug, "this fixture was captured from a NON-debug enclave");
+        let actual_pcr0 = facts.pcr0.iter().map(|b| format!("{b:02x}")).collect::<String>();
+        assert_eq!(actual_pcr0, REAL_PCR0_HEX, "PCR0 must match the real build-enclave output recorded alongside this fixture");
+    }
+
     #[test]
     fn first_ever_check_with_no_previous_record_counts_as_new() {
         assert!(is_genuinely_new_module_id(None, "i-abc-enc123"));

@@ -164,17 +164,29 @@ genuinely open:
   an additional binding once you already trust a published PCR8, not a
   replacement for PCR0.
 - **Certificate expiry IS checked, confirmed by reading the actual
-  dependency source, not assumed.** A fair question the second review round
-  raised (the crate's own docs.rs page doesn't make this obvious): does
-  `attestation-doc-validation` reject a Nitro document signed by an expired
-  certificate? Yes — `cert.rs`'s `validate_cert_trust_chain` gets the current
-  time (`time.rs`'s `get_epoch()`, real `SystemTime::now()`, with a
-  `FAKETIME` override for that crate's own tests) and passes it to
-  `webpki::Time` / `verify_is_valid_tls_server_cert`, which checks
-  NotBefore/NotAfter as a standard part of chain validation. Nitro's leaf
-  certificate is documented to live only hours, so in practice this already
-  gives offline mode a rough, real freshness bound on the Nitro side — a
-  months-old saved document won't just fail on content, it'll fail on an
+  dependency source, not assumed — and a real self-correction along the way,
+  worth stating plainly rather than quietly fixing.** A fair question the
+  second review round raised (the crate's own docs.rs page doesn't make this
+  obvious): does `attestation-doc-validation` reject a Nitro document signed
+  by an expired certificate? Yes — `cert.rs`'s `validate_cert_trust_chain`
+  gets the current time (`get_epoch()`, real `SystemTime::now()`) and passes
+  it to `webpki::Time` / `verify_is_valid_tls_server_cert`, which checks
+  NotBefore/NotAfter as a standard part of chain validation. An earlier draft
+  of this note also claimed that crate exposes a `FAKETIME` env-var override
+  "for that crate's own tests, worth remembering for this crate's own future
+  fixture-based testing" — checked against the real raw source (not a
+  summarizing tool's paraphrase, which is what produced the wrong claim in
+  the first place) and that's only half right: `get_epoch()`'s `FAKETIME`
+  branch is `#[cfg(test)]`-gated in `attestation-doc-validation` itself, so
+  it compiles into THEIR test binary only, never into the published library
+  this crate (or anything else) depends on normally. There is no way to
+  override this check's clock from outside that crate's own test suite —
+  confirmed empirically too: a real captured document still reported
+  `all checks passed` even with `FAKETIME=2090844874` set, exactly as the
+  `#[cfg(test)]` gating predicts. Nitro's leaf certificate is still
+  documented to live only hours, so in practice this already gives offline
+  mode a rough, real freshness bound on the Nitro side — a months-old saved
+  document won't just fail on content, it'll fail on an
   expired leaf cert first. Not independently re-verified by THIS crate
   (would be redundant — it's already happening one layer down), and TDX's
   DCAP collateral freshness is a separate mechanism (`dcap_qvl::verify`
