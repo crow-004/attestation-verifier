@@ -1,6 +1,6 @@
 //! The actual attestation-verification engine, extracted so it can be
 //! genuinely open source: independently compilable by anyone, without also
-//! needing access to the rest of Velocity's (proprietary) codebase.
+//! needing access to the rest of Tachpawl's (proprietary) codebase.
 //!
 //! `tee-adapter` re-exports these same modules (`tee_adapter::attestation::
 //! nitro`/`::dstack`) for its own internal use -- this crate is the single

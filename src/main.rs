@@ -1,11 +1,11 @@
 //! Standalone, independently-compilable attestation verifier.
 //!
-//! The point: nobody should have to take Velocity's word for which measurement
-//! a given TEE-backed node (a `NetworkedThresholdSigner` party, `hsm-service`,
+//! The point: nobody should have to take Tachpawl's word for which measurement
+//! a given TEE-backed node (a `NetworkedThresholdSigner` party, `authority-service`,
 //! `tee-service`) is actually running. Anyone -- another MPC party, a design
 //! partner, an auditor -- can `cargo build` this crate themselves from this
 //! published source, and independently check any node against a published
-//! expected measurement, without trusting Velocity's own verification claims.
+//! expected measurement, without trusting Tachpawl's own verification claims.
 //! See TODO.md item #11's "open, reproducible verifier" plan and item #15's
 //! reproducible-build work, which this tool is the other half of: item #15
 //! lets someone confirm a published measurement corresponds to an audited
@@ -44,9 +44,9 @@
 //! - **Nitro PCR8 and nonce support exist as of 2026-09-30**, closing most of
 //!   a real external review's findings (see TODO.md item #15) -- but this
 //!   tool still can't independently establish that a Nitro EIF's signing
-//!   certificate (the thing PCR8 measures) belongs to Velocity specifically;
+//!   certificate (the thing PCR8 measures) belongs to Tachpawl specifically;
 //!   it can only compare PCR8 against a value you already trust came from
-//!   Velocity through some other channel.
+//!   Tachpawl through some other channel.
 //! - **`--quote-file`/offline mode has no built-in quote-age limit.** DCAP
 //!   collateral freshness (TCB info currency) is checked against wall-clock
 //!   "now" inside `dcap_qvl::verify` itself, but the QUOTE's own age is not
@@ -61,7 +61,7 @@ use std::fs;
 use std::process::ExitCode;
 
 fn print_usage() {
-    eprintln!("attestation-verifier -- independently verify a Velocity TEE node's attestation");
+    eprintln!("attestation-verifier -- independently verify a Tachpawl TEE node's attestation");
     eprintln!();
     eprintln!("USAGE:");
     eprintln!("  attestation-verifier --backend nitro  --expect-pcr0 <hex> [--expect-pcr8 <hex>] [--quote-file <path>]");
@@ -402,7 +402,7 @@ async fn run_dstack(
     let quote = match quote_file {
         Some(path) => fs::read(path).map_err(|e| format!("failed to read --quote-file {path}: {e}"))?,
         None => {
-            let report_data = live_nonce.clone().unwrap_or_else(|| b"velocity-attestation-verifier-v1".to_vec());
+            let report_data = live_nonce.clone().unwrap_or_else(|| b"tachpawl-attestation-verifier-v1".to_vec());
             attestation_verifier::dstack::fetch_raw_quote(&report_data)
                 .await
                 .map_err(|e| format!("fetch_raw_quote failed: {e} (expected unless run inside a real dstack TDX VM)"))?

@@ -9,14 +9,14 @@ edition = "2021"
 # Deliberately NOT license.workspace = true: the rest of this workspace is
 # "Proprietary" (see root Cargo.toml), but the whole point of this crate is
 # that anyone -- another MPC party, a design partner, an auditor -- can
-# compile and run it themselves without needing Velocity's permission or
+# compile and run it themselves without needing Tachpawl's permission or
 # access to the rest of this (private) repository. A proprietary license on
 # the one crate meant to be freely rebuilt by third parties would be
 # self-defeating. MIT OR Apache-2.0 matches the Rust ecosystem's own
 # convention (and `cggmp21`'s own dual license).
 license = "MIT OR Apache-2.0"
 publish = false
-description = "Independent, open-source attestation-verification engine and CLI for Velocity's TEE-backed nodes (Nitro + TDX/dstack). Adds no new cryptography -- see README.md."
+description = "Independent, open-source attestation-verification engine and CLI for Tachpawl's TEE-backed nodes (Nitro + TDX/dstack). Adds no new cryptography -- see README.md."
 
 [lib]
 name = "attestation_verifier"
@@ -62,7 +62,7 @@ dstack = ["dep:dstack-sdk", "dep:hex", "dep:dcap-qvl"]
 
 # Reproducible-build settings (TODO.md item #15's recipe, applied here too).
 # Cargo only honors [profile.*] from the WORKSPACE ROOT manifest, so while
-# this crate lives inside the main velocity workspace these are silently
+# this crate lives inside the main tachpawl workspace these are silently
 # ignored there (the root's own identical settings apply instead) -- they
 # exist here so the SAME settings take effect once this manifest becomes its
 # own workspace root, i.e. the moment this directory is extracted/published

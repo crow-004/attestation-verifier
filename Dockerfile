@@ -1,5 +1,5 @@
 # Reproducible-build recipe (TODO.md item #15), applied to this crate.
-# Static-musl for the same reason as docker/Dockerfile.hsm-service and
+# Static-musl for the same reason as docker/Dockerfile.authority-service and
 # docker/Dockerfile.tee-service: portable to a minimal root filesystem (this
 # binary is meant to be run FROM INSIDE the enclave being checked, in live
 # mode, where there may be no shell or dynamic libc to speak of), and it
@@ -10,7 +10,7 @@
 # Pinned by digest, not a floating tag: reproducible-build verification means
 # a third party rebuilds this independently and expects byte-identical
 # output. This digest is rust:1-alpine as resolved 2026-09-27 (rustc 1.98.1,
-# Alpine 3.24.2) -- the same one already used for hsm-service/tee-service;
+# Alpine 3.24.2) -- the same one already used for authority-service/tee-service;
 # matches this crate's own rust-toolchain.toml pin -- move both together.
 FROM rust@sha256:7cc1c22d77d9432f7fe012a70e6d3e555af54c2a6832700ed7d553f1769ae89f AS build
 RUN apk add --no-cache musl-dev

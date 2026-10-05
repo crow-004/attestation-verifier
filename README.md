@@ -1,15 +1,15 @@
 # attestation-verifier
 
-Independent, open-source (MIT OR Apache-2.0) verification of Velocity's
+Independent, open-source (MIT OR Apache-2.0) verification of Tachpawl's
 TEE-backed nodes — AWS Nitro Enclaves and Intel TDX (via dstack's guest
-agent). Nobody has to take Velocity's word for which measurement a given
+agent). Nobody has to take Tachpawl's word for which measurement a given
 node is actually running: this crate is meant to be cloned and compiled by
 anyone — another MPC party, a design partner's own security team, an
 independent auditor — and pointed at a node they want to check themselves.
 
 ## Why this exists
 
-Velocity's `HSM_AUTHORITY` role can run as a networked MPC threshold signer
+Tachpawl's `HSM_AUTHORITY` role can run as a networked MPC threshold signer
 (`NetworkedThresholdSigner`), where multiple independent parties each hold
 one share of the signing key and no single party ever holds the whole key.
 That property only holds if the parties are genuinely independent — if the
@@ -30,7 +30,7 @@ the COSE_Sign1 signature and certificate-chain check to AWS's real Nitro
 root CA (`nitro.rs`, via the `attestation-doc-validation` crate), and the
 DCAP certificate-chain check against Intel's real PCCS collateral
 (`dstack.rs`, via `dcap-qvl`) — already existed, already unit-tested, in
-Velocity's own `tee-adapter` crate before this split. `tee-adapter`
+Tachpawl's own `tee-adapter` crate before this split. `tee-adapter`
 re-exports these same modules for its own internal use rather than
 duplicating them; this crate is the single source of truth for both.
 
@@ -160,7 +160,7 @@ genuinely open:
 - **Nitro's PCR8 support only compares a value you already trust.** PCR8 is
   the SHA-384 hash of the EIF's signing certificate, when present — this
   tool can check a live document's PCR8 against one you supply, but can't
-  independently establish that certificate belongs to Velocity. Useful as
+  independently establish that certificate belongs to Tachpawl. Useful as
   an additional binding once you already trust a published PCR8, not a
   replacement for PCR0.
 - **Certificate expiry IS checked, confirmed by reading the actual
@@ -220,7 +220,7 @@ genuinely open:
 - **Nodes don't yet expose a "quote for this nonce" endpoint of their own**
   — the "Checking someone else's node" recipe above works today because
   this CLI itself can be run by the node operator, but a real design
-  partner would reasonably want this built into `tee-service`/`hsm-service`
+  partner would reasonably want this built into `tee-service`/`authority-service`
   directly rather than asking an operator to separately clone and run this
   tool. Tracked, not started: TODO.md item #15.
 
@@ -334,20 +334,20 @@ deployed this exact tool inside a TEE, `attestation-verifier` run by anyone
 else could confirm the live instance is running the code you just read.
 No gap, no leap of faith, for this code specifically.
 
-**For Velocity's actual production nodes — `tee-service`, `hsm-service`**:
+**For Tachpawl's actual production nodes — `tee-service`, `authority-service`**:
 that chain does *not* close today, and we say so plainly rather than let
 the framing above imply otherwise. Those binaries are what's actually
 measured and checked in a real deployment, and their source is not public
-— it's Velocity's proprietary core. So today, pointing `attestation-
-verifier` at a real `tee-service`/`hsm-service` node proves the live
-measurement matches whatever hash Velocity published — real value on its
+— it's Tachpawl's proprietary core. So today, pointing `attestation-
+verifier` at a real `tee-service`/`authority-service` node proves the live
+measurement matches whatever hash Tachpawl published — real value on its
 own, since it catches silent tampering or drift between two checks over
 time — but it does **not** let an outside party read the code behind that
 hash and confirm it's honest, the way they could for this crate itself.
 Closing that gap for the production binaries specifically needs one of:
 an independent security audit of that source (under NDA, with the audit
 firm publicly vouching for the exact commit and its hash — see the main
-project's `TODO.md` item #15), or Velocity open-sourcing more of that
+project's `TODO.md` item #15), or Tachpawl open-sourcing more of that
 stack over time. Neither is done yet. Stated here precisely so nobody
 reads more into "Code is Law" than what's actually true today.
 
